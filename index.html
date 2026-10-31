@@ -142,6 +142,16 @@ summary { cursor: pointer; font-weight: 600; }
 footer { font-size: 12px; color: var(--muted); text-align: center; }
 @media (min-width: 640px) { .ch-now { font-size: 34px; } }
 @media (prefers-reduced-motion: reduce) { .scorefill { transition: none; } }
+
+/* [fix2] Tập thở */
+.breath { display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: center; }
+.bring { width: 140px; height: 140px; display: grid; place-items: center; position: relative; }
+.bcircle { position: absolute; inset: 0; border-radius: 50%; background: color-mix(in srgb, var(--resp) 20%, transparent); border: 2px solid var(--resp); transform: scale(.55); }
+.blabel { position: relative; text-align: center; display: grid; gap: 2px; }
+.blabel b { font-size: 16px; }
+.blabel span { font-size: 22px; font-weight: 700; color: var(--resp); }
+.bside { display: grid; gap: 10px; min-width: 0; }
+@media (max-width: 440px) { .breath { grid-template-columns: 1fr; justify-items: center; } .bside { width: 100%; } }
 </style>
 
 <div class="wrap">
@@ -186,6 +196,21 @@ footer { font-size: 12px; color: var(--muted); text-align: center; }
     </div>
   </section>
 
+  <section class="panel" id="breathPanel">
+    <h2>Tập thở</h2>
+    <div class="breath">
+      <div class="bring" aria-hidden="true"><div class="bcircle" id="bCircle"></div><div class="blabel"><b id="bWord">Sẵn sàng</b><span class="num" id="bCount"></span></div></div>
+      <div class="bside">
+        <p class="small" id="bInfo" aria-live="polite">Hít vào 4 giây khi thiết bị rung, thở ra 6 giây khi thiết bị ngừng rung.</p>
+        <div class="actions">
+          <button class="primary" id="btnBreath" type="button">Bắt đầu tập thở</button>
+          <button id="btnRecal" type="button">Đo lại baseline</button>
+        </div>
+        <p class="small muted" id="bNote"></p>
+      </div>
+    </div>
+  </section>
+
   <section class="channels" id="channels"></section>
 
   <section class="panel">
@@ -217,7 +242,7 @@ footer { font-size: 12px; color: var(--muted); text-align: center; }
     <div class="raw" id="rawBase">–</div>
   </details>
 
-  <footer>Thiết bị ECG-STRESS · firmware v6 · dữ liệu chỉ nằm trên điện thoại này</footer>
+  <footer>Thiết bị ECG-STRESS · firmware v6 (fix2) · dữ liệu chỉ nằm trên điện thoại này</footer>
 </div>
 
 <script>
@@ -226,6 +251,8 @@ footer { font-size: 12px; color: var(--muted); text-align: center; }
   const SVC = "6e7a0001-5c1f-4d8e-9b2a-3f0e5d7c1a01";
   const LIVE = "6e7a0002-5c1f-4d8e-9b2a-3f0e5d7c1a01";
   const BASE = "6e7a0003-5c1f-4d8e-9b2a-3f0e5d7c1a01";
+  const BREATH = "6e7a0004-5c1f-4d8e-9b2a-3f0e5d7c1a01";   // [fix2]
+  const CMD = "6e7a0005-5c1f-4d8e-9b2a-3f0e5d7c1a01";      // [fix2]
   const HISTORY_MAX = 240; // 240 bước × 15 s = 1 giờ
   const SPARK_N = 40;      // 10 phút gần nhất
 
@@ -257,7 +284,7 @@ footer { font-size: 12px; color: var(--muted); text-align: center; }
     { key: "resp",  zi: 2, name: "Nhịp thở",          unit: "lần/phút", color: "--resp", up: "nhanh hơn", down: "chậm hơn", dec: 1 },
   ];
 
-  const S = { base: null, live: null, hist: [], mode: "idle", rawLive: "", rawBase: "", device: null, chars: null, lastBseq: -1 };
+  const S = { base: null, live: null, hist: [], mode: "idle", rawLive: "", rawBase: "", device: null, chars: null, lastBseq: -1, breath: null };
   const $ = (id) => document.getElementById(id);
 
   // ---------------- Lưu lịch sử trên máy (tiện ích, có thể không có) ----------------
@@ -366,6 +393,7 @@ footer { font-size: 12px; color: var(--muted); text-align: center; }
     if (L) {
       if (L.state === 1) { word = "Đang đo baseline"; sub = "Ngồi yên, thở bình thường trong 150 giây"; color = "var(--hrv)"; }
       else if (L.state === 0) { word = L.calPending ? "Chờ tín hiệu ổn định" : "Chưa có baseline"; sub = L.calPending ? `Calibration sẽ tự bắt đầu sau ${L.calStreak}/2 cửa sổ hợp lệ liên tiếp` : "Bấm nút BOOT trên thiết bị để calibration"; color = "var(--muted)"; }
+      else if (L.calPending) { word = "Chờ đo baseline mới"; sub = `Đã nhận lệnh. Đang chờ tín hiệu ổn định (${L.calStreak}/2 cửa sổ hợp lệ liên tiếp), sau đó đo 150 giây. Vẫn dùng baseline cũ cho tới khi đo xong.`; color = "var(--hrv)"; }
       else if (L.level >= 2) { word = "Căng thẳng mức 2"; sub = "Thiết bị đang rung hướng dẫn thở dài hơn"; color = "var(--crit)"; st.classList.add("l2"); }
       else if (L.level === 1) { word = "Căng thẳng mức 1"; sub = "Thiết bị rung hướng dẫn thở: hít 4 giây, thở ra 6 giây"; color = "var(--crit)"; st.classList.add("l1"); }
       else if (!L.signalValid) { word = "Tín hiệu chưa tốt"; sub = L.leadsOff ? "Điện cực bị tuột" : !L.motionOk ? "Đang cử động nhiều, bước này bị bỏ qua" : "ECG không đủ nhịp hợp lệ"; color = "var(--warn)"; }
@@ -495,7 +523,8 @@ footer { font-size: 12px; color: var(--muted); text-align: center; }
       r = parsePacket(raw, LIVE_FIELDS, "L1");
     }
     if (!r.ok) { S.rawLive = raw; setNotice(`Gói dữ liệu không đọc được (${r.why}).`); render(); return; }
-    if (r.v.bseq !== S.lastBseq) { S.lastBseq = r.v.bseq; await refreshBaseline(); }
+    const rebooted = S.live && r.v.epoch < S.live.epoch;   // thiet bi vua khoi dong lai
+    if (r.v.bseq !== S.lastBseq || rebooted) { S.lastBseq = r.v.bseq; await refreshBaseline(); }
     onLive(r.v, raw);
   }
 
@@ -528,12 +557,19 @@ footer { font-size: 12px; color: var(--muted); text-align: center; }
     const svc = await server.getPrimaryService(SVC);
     const live = await svc.getCharacteristic(LIVE);
     const base = await svc.getCharacteristic(BASE);
-    S.chars = { live, base };
+    let breath = null, cmd = null;   // [fix2] firmware cu khong co 2 kenh nay -> app van chay, chi khong dieu khien duoc
+    try { breath = await svc.getCharacteristic(BREATH); cmd = await svc.getCharacteristic(CMD); } catch (e) { breath = cmd = null; }
+    S.chars = { live, base, breath, cmd };
     S.mode = "live";
     if (!S.hist.length) { const saved = loadLocal(); if (saved) { S.hist = saved.hist; } }
     await refreshBaseline();
     live.addEventListener("characteristicvaluechanged", (ev) => { handleLiveText(decoder.decode(ev.target.value)).catch(() => {}); });
     await live.startNotifications();
+    if (breath) {
+      breath.addEventListener("characteristicvaluechanged", (ev) => onBreathText(decoder.decode(ev.target.value)));
+      await breath.startNotifications();
+      onBreathText(await readText(breath));
+    } else S.breath = null;
     await handleLiveText(await readText(live));
     keepAwake();
   }
@@ -552,7 +588,7 @@ footer { font-size: 12px; color: var(--muted); text-align: center; }
 
   function disconnect() {
     if (S.mode === "demo") { stopDemo(); S.mode = "idle"; S.live = null; S.base = null; S.hist = []; render(); setNotice(defaultNotice()); return; }
-    const d = S.device; S.device = null; S.mode = "idle";
+    const d = S.device; S.device = null; S.mode = "idle"; S.breath = null;
     try { d && d.gatt.connected && d.gatt.disconnect(); } catch (e) {}
     render();
   }
@@ -561,9 +597,80 @@ footer { font-size: 12px; color: var(--muted); text-align: center; }
   async function keepAwake() { try { if ("wakeLock" in navigator && !wake) { wake = await navigator.wakeLock.request("screen"); wake.addEventListener("release", () => { wake = null; }); } } catch (e) {} }
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.mode === "live") keepAwake(); });
 
+// ---------------- [fix2] Tập thở + lệnh gửi xuống thiết bị ----------------
+  const BREATH_FIELDS = ["tag","state","cycle","target","elapsed","inhale","exhale","cool","src"];
+  const SRC_TXT = ["", "bật từ nút trên thiết bị", "bật từ app", "tự động do cảnh báo mức 1", "tự động do cảnh báo mức 2"];
+  const ease = (f) => 0.5 - 0.5 * Math.cos(Math.PI * Math.max(0, Math.min(1, f)));
+  const mmss = (ms) => { const s = Math.ceil(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+  const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let demoBreathTimer = null;
+
+  function onBreathText(raw) {
+    const r = parsePacket(raw, BREATH_FIELDS, "R1");
+    if (!r.ok) return;
+    S.breath = Object.assign({}, r.v, { t0: performance.now() - (Number.isFinite(r.v.elapsed) ? r.v.elapsed : 0) });
+  }
+
+  async function sendCmd(text) {
+    if (S.mode === "demo") { demoCmd(text); return; }
+    if (S.mode !== "live" || !S.chars || !S.chars.cmd) { setNotice("Chưa kết nối thiết bị có hỗ trợ điều khiển từ app."); return; }
+    const data = new TextEncoder().encode(text);
+    try {
+      if (S.chars.cmd.writeValueWithResponse) await S.chars.cmd.writeValueWithResponse(data);
+      else await S.chars.cmd.writeValue(data);
+    } catch (e) { setNotice("Gửi lệnh không được: " + esc(String(e && e.message || e)) + ". Thử bấm lại."); }
+  }
+
+  function renderBreath() {
+    const b = S.breath, L = S.live;
+    let word = "Sẵn sàng", count = "", info = "Hít vào 4 giây khi thiết bị rung, thở ra 6 giây khi thiết bị ngừng rung. Mỗi lần 4 nhịp.", scale = 0.55;
+    const active = !!b && (b.state === 1 || b.state === 2);
+    if (b) {
+      const el = performance.now() - b.t0;
+      const head = `Nhịp ${Math.min(b.target, b.cycle + 1)}/${b.target} · ${SRC_TXT[b.src] || ""}`;
+      if (b.state === 1) { word = "Hít vào"; count = Math.max(1, Math.ceil((b.inhale - el) / 1000)); scale = 0.55 + 0.45 * ease(el / b.inhale); info = head + ". Thiết bị đang rung: hít vào chậm bằng mũi."; }
+      else if (b.state === 2) { word = "Thở ra"; count = Math.max(1, Math.ceil((b.exhale - el) / 1000)); scale = 1 - 0.45 * ease(el / b.exhale); info = head + ". Thiết bị ngừng rung: thở ra chậm."; }
+      else if (b.state === 3) { word = "Nghỉ"; count = mmss(Math.max(0, b.cool - el)); info = "Vừa tập xong. Trong lúc nghỉ, thiết bị không tự nhắc tập thở lại, nhưng bạn vẫn có thể tự bắt đầu."; }
+    }
+    if (reduceMotion) scale = active ? 0.85 : 0.55;
+    $("bCircle").style.transform = `scale(${scale.toFixed(3)})`;
+    $("bWord").textContent = word; $("bCount").textContent = count;
+    if ($("bInfo").textContent !== info) $("bInfo").textContent = info;
+
+    const live = S.mode === "live" && S.chars && S.chars.cmd, demo = S.mode === "demo", can = !!(live || demo);
+    const calibrating = !!L && L.state === 1, pending = !!L && !!L.calPending, alert = !!L && L.level >= 1;
+    const bb = $("btnBreath"), br = $("btnRecal");
+    bb.textContent = active ? "Dừng tập thở" : "Bắt đầu tập thở";
+    bb.disabled = !can || (!active && calibrating);
+    br.disabled = !can || active || alert || calibrating || pending;
+    let note = "";
+    if (S.mode === "live" && !live) note = "Firmware trên thiết bị chưa nhận lệnh từ app. Cần nạp firmware mới (v6 fix2).";
+    else if (!can) note = "Kết nối thiết bị để điều khiển tập thở.";
+    else if (calibrating) note = "Đang đo baseline nên chưa tập thở được.";
+    else if (pending) note = "Đang chờ tín hiệu ổn định để đo baseline mới.";
+    else if (active && alert) note = "Bấm Dừng sẽ đồng thời tắt cảnh báo (giống nút BOOT trên thiết bị).";
+    else if (alert) note = "Đang có cảnh báo nên chưa đo lại baseline được.";
+    if ($("bNote").textContent !== note) $("bNote").textContent = note;
+  }
+
+  function demoCmd(text) {
+    if (text === "CALIBRATE") { setNotice("Trong chế độ mô phỏng không đo baseline được. Kết nối thiết bị thật để dùng nút này."); return; }
+    if (text === "BREATH_STOP") { setBreathLocal(3, S.breath ? S.breath.cycle : 0, S.breath ? S.breath.src : 2); return; }
+    if (text === "BREATH_START") setBreathLocal(1, 0, 2);
+  }
+  // Mô phỏng đúng máy trạng thái của firmware (4 s hít / 6 s thở / 4 nhịp / nghỉ 3 phút)
+  function setBreathLocal(state, cycle, src) {
+    const cfg = { inhale: 4000, exhale: 6000, cool: 180000, target: 4 };
+    clearTimeout(demoBreathTimer);
+    S.breath = { tag: "R1", state, cycle, target: cfg.target, elapsed: 0, inhale: cfg.inhale, exhale: cfg.exhale, cool: cfg.cool, src, t0: performance.now() };
+    if (state === 1) demoBreathTimer = setTimeout(() => setBreathLocal(2, cycle, src), cfg.inhale);
+    else if (state === 2) demoBreathTimer = setTimeout(() => (cycle + 1 >= cfg.target ? setBreathLocal(3, cycle + 1, src) : setBreathLocal(1, cycle + 1, src)), cfg.exhale);
+    else if (state === 3) demoBreathTimer = setTimeout(() => setBreathLocal(0, 0, 0), cfg.cool);
+  }
+
   // ---------------- Mô phỏng: chạy đúng công thức firmware (logreg + cổng HR + luật C5) ----------------
   let demoTimer = null;
-  function stopDemo() { if (demoTimer) { clearInterval(demoTimer); demoTimer = null; } }
+  function stopDemo() { if (demoTimer) { clearInterval(demoTimer); demoTimer = null; } clearTimeout(demoBreathTimer); S.breath = null; }
   function startDemo() {
     disconnect(); stopDemo();
     S.mode = "demo"; S.hist = [];
@@ -602,6 +709,7 @@ footer { font-size: 12px; color: var(--muted); text-align: center; }
         z0: valid ? z[0] : NaN, z1: valid ? z[1] : NaN, z2: valid ? z[2] : NaN, p: valid ? p : NaN, evidence: valid ? evidence : NaN, level,
         sustain, need: 75, thrHi: B.tHi, backoff: 1, calPending: 0, calStreak: 2, calElapsed: 0, calN0: 10, calN1: 10, calN2: 9,
         motionStd: moving ? 0.21 : 0.012 + rand() * 0.01, ecgMissed: 0, bseq: 1 };
+      if (level === 1 && (!S.live || S.live.level === 0) && (!S.breath || S.breath.state === 0)) setBreathLocal(1, 0, 3);   // như firmware: mức 1 tự bật tập thở
       S.rawLive = "(mô phỏng) bước " + o.epoch;
       onLive(o);
     };
@@ -630,6 +738,12 @@ footer { font-size: 12px; color: var(--muted); text-align: center; }
   $("btnDemo").addEventListener("click", startDemo);
   $("btnDisconnect").addEventListener("click", disconnect);
   $("btnCopy").addEventListener("click", copyCsv);
+  $("btnBreath").addEventListener("click", () => sendCmd(S.breath && (S.breath.state === 1 || S.breath.state === 2) ? "BREATH_STOP" : "BREATH_START"));
+  $("btnRecal").addEventListener("click", () => {
+    if (S.mode === "demo") { demoCmd("CALIBRATE"); return; }
+    if (confirm("Đo lại baseline trong 150 giây?\n\nNgồi yên, thở bình thường. Baseline cũ vẫn được dùng cho tới khi đo xong.")) sendCmd("CALIBRATE");
+  });
+  (function frame() { renderBreath(); requestAnimationFrame(frame); })();
   buildChannels();
   let rz = null;
   window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(render, 150); });
