@@ -1,0 +1,17 @@
+{
+  "name": "Nhịp Ổn Định",
+  "short_name": "Nhịp Ổn Định",
+  "description": "So sánh nhịp tim, RMSSD, nhịp thở hiện tại với trạng thái ổn định — thiết bị ECG-STRESS qua Bluetooth",
+  "lang": "vi",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a1012",
+  "theme_color": "#0a1012",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

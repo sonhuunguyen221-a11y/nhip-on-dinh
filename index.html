@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a1012">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Nhịp Ổn Định">
+</head>
+<body style="margin:0">
+<title>Nhịp Ổn Định</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: một cột kiểu màn hình theo dõi bệnh nhân — tóm tắt trạng thái trên cùng, rồi 3 kênh HR / RMSSD / Nhịp thở,
+   mỗi kênh có dải "vùng ổn định" (baseline ± SD) và đường xu hướng; chi tiết kỹ thuật ở dưới. */
+:root {
+  --bg: #eef2f1;
+  --surface: #ffffff;
+  --sunk: #e4eae8;
+  --ink: #15201c;
+  --muted: #586964;
+  --line: #d3dcd9;
+  --hr: #0b8457;
+  --hrv: #2b66b0;
+  --resp: #a26f00;
+  --ok: #1d7f63;
+  --warn: #b86e00;
+  --crit: #c0392b;
+  --font-ui: "Be Vietnam Pro", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a1012; --surface: #111a1d; --sunk: #0d1517; --ink: #e3ece9; --muted: #8b9d97; --line: #22302f;
+    --hr: #39d98a; --hrv: #6ea8ff; --resp: #f0c04a; --ok: #39d98a; --warn: #f0a83a; --crit: #ff6b5b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0a1012; --surface: #111a1d; --sunk: #0d1517; --ink: #e3ece9; --muted: #8b9d97; --line: #22302f;
+  --hr: #39d98a; --hrv: #6ea8ff; --resp: #f0c04a; --ok: #39d98a; --warn: #f0a83a; --crit: #ff6b5b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 16px 40px;
+}
+.wrap { max-width: 760px; margin: 0 auto; display: grid; gap: 14px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+p { margin: 0; }
+.num { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--font-mono); }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+
+/* Header */
+.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.top .title { display: grid; gap: 2px; min-width: 0; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+button {
+  font: inherit; font-weight: 600; font-size: 14px; border-radius: 10px; padding: 9px 14px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+}
+button.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+button:hover { filter: brightness(1.06); }
+button:focus-visible { outline: 3px solid var(--hrv); outline-offset: 2px; }
+button:disabled { opacity: .5; cursor: default; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--surface); }
+.pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.pill.live i { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+.pill.demo i { background: var(--warn); }
+
+.notice { border: 1px dashed var(--line); border-radius: 12px; padding: 10px 12px; font-size: 13px; color: var(--muted); }
+.notice b { color: var(--ink); }
+
+/* Status hero */
+.status { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px; display: grid; gap: 14px; border-top: 4px solid var(--state-color, var(--ok)); }
+.status-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.status-word { font-size: 26px; font-weight: 700; letter-spacing: -0.01em; color: var(--state-color, var(--ok)); }
+.status-sub { color: var(--muted); font-size: 14px; }
+.scorebar { display: grid; gap: 6px; }
+.scoretrack { position: relative; height: 14px; border-radius: 7px; background: var(--sunk); overflow: hidden; }
+.scorefill { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: 7px; background: var(--state-color, var(--ok)); transition: width .4s ease; }
+.scoremark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); }
+.scorelabels { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.steps { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.step { width: 26px; height: 10px; border-radius: 3px; background: var(--sunk); border: 1px solid var(--line); }
+.step.on { background: var(--warn); border-color: var(--warn); }
+.status.l1 .step.on, .status.l2 .step.on { background: var(--crit); border-color: var(--crit); }
+.calib { display: grid; gap: 6px; }
+
+/* Channel cards */
+.channels { display: grid; gap: 12px; }
+.ch { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 14px 10px; display: grid; gap: 10px; min-width: 0; }
+.ch-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.ch-name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.ch-name .sw { width: 10px; height: 10px; border-radius: 2px; background: var(--c); }
+.ch-now { font-size: 30px; font-weight: 700; color: var(--c); line-height: 1; }
+.ch-now small { font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 4px; }
+.ch-verdict { font-size: 14px; }
+.ch-verdict b { font-weight: 600; }
+.strip { position: relative; height: 34px; }
+.strip svg, .spark svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.spark { height: 74px; }
+.ch-foot { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.tag { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; padding: 1px 7px; border-radius: 5px; border: 1px solid var(--line); color: var(--muted); }
+.tag.pers { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+
+/* Contribution */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.contrib { display: grid; gap: 8px; }
+.crow { display: grid; grid-template-columns: 92px 1fr 64px; align-items: center; gap: 10px; font-size: 13px; }
+.cbar { position: relative; height: 12px; background: var(--sunk); border-radius: 4px; }
+.cbar .axis { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--muted); }
+.cbar .fill { position: absolute; top: 0; bottom: 0; border-radius: 4px; background: var(--c); }
+.crow .v { text-align: right; }
+
+.quality { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.q { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: grid; gap: 2px; }
+.q .k { font-size: 12px; color: var(--muted); }
+.q .val { font-weight: 600; }
+.q.bad .val { color: var(--crit); }
+.q.good .val { color: var(--ok); }
+
+details { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
+summary { cursor: pointer; font-weight: 600; }
+.raw { overflow-x: auto; font-family: var(--font-mono); font-size: 12px; background: var(--sunk); border-radius: 8px; padding: 8px; white-space: pre; margin-top: 8px; }
+.prose { display: grid; gap: 8px; font-size: 14px; max-width: 65ch; margin-top: 8px; }
+.prose code { font-family: var(--font-mono); font-size: 12.5px; }
+footer { font-size: 12px; color: var(--muted); text-align: center; }
+@media (min-width: 640px) { .ch-now { font-size: 34px; } }
+@media (prefers-reduced-motion: reduce) { .scorefill { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="title">
+      <h1>Nhịp Ổn Định</h1>
+      <p class="muted small">So sánh cơ thể bạn lúc này với lúc bình thường (baseline đo khi calibration)</p>
+    </div>
+    <div class="actions">
+      <span class="pill" id="connPill"><i></i><span id="connText">Chưa kết nối</span></span>
+    </div>
+  </header>
+
+  <div class="actions">
+    <button class="primary" id="btnConnect" type="button">Kết nối thiết bị</button>
+    <button id="btnDemo" type="button">Xem dữ liệu mô phỏng</button>
+    <button id="btnDisconnect" type="button" hidden>Ngắt kết nối</button>
+    <button id="btnCopy" type="button">Sao chép CSV</button>
+  </div>
+  <p class="notice" id="notice"></p>
+
+  <section class="status" id="status" aria-live="polite">
+    <div class="status-head">
+      <div>
+        <div class="status-word" id="stWord">Bình thường</div>
+        <div class="status-sub" id="stSub">Đang chờ dữ liệu</div>
+      </div>
+      <div class="muted small num" id="stEpoch"></div>
+    </div>
+    <div class="scorebar">
+      <div class="scorelabels"><span>Điểm stress của bước 15 giây này</span><span class="num" id="scoreText">–</span></div>
+      <div class="scoretrack"><div class="scorefill" id="scoreFill"></div><div class="scoremark" id="scoreMark"></div></div>
+      <div class="scorelabels"><span>0</span><span id="thrText">ngưỡng</span><span>1</span></div>
+    </div>
+    <div class="calib" id="sustainBox">
+      <div class="scorelabels"><span>Các bước liên tiếp vượt ngưỡng (mỗi ô = 15 giây)</span><span class="num" id="sustainText"></span></div>
+      <div class="steps" id="steps"></div>
+    </div>
+    <div class="calib" id="calibBox" hidden>
+      <div class="scorelabels"><span>Đang đo baseline: ngồi yên, thở bình thường</span><span class="num" id="calibText"></span></div>
+      <div class="scoretrack"><div class="scorefill" id="calibFill" style="background:var(--hrv)"></div></div>
+    </div>
+  </section>
+
+  <section class="channels" id="channels"></section>
+
+  <section class="panel">
+    <h2>Vì sao điểm ra như vậy</h2>
+    <p class="small muted" id="contribNote">Mỗi thanh là phần đóng góp của một đặc trưng vào điểm stress (trọng số model × độ lệch so với baseline).</p>
+    <div class="contrib" id="contrib"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Chất lượng tín hiệu</h2>
+    <div class="quality" id="quality"></div>
+  </section>
+
+  <details>
+    <summary>Cách đọc màn hình này</summary>
+    <div class="prose">
+      <p><b>Vùng ổn định</b> là dải trung bình ± 1 độ lệch chuẩn (SD) của bạn, đo trong 150 giây calibration lúc ngồi yên. Dải nhạt hơn là ± 2 SD.</p>
+      <p><b>Độ lệch</b> tính bằng số SD: dưới 1 SD là trong vùng ổn định, 1 đến 2 SD là lệch nhẹ, trên 2 SD là lệch rõ. Thiết bị giới hạn độ lệch ở ± 6 SD.</p>
+      <p><b>Điểm stress</b> đến từ model hồi quy logistic trên ba độ lệch. Nếu nhịp tim không cao hơn baseline thì điểm đưa vào cảnh báo bằng 0, dù hai đặc trưng kia lệch.</p>
+      <p><b>Cảnh báo mức 1</b> bật khi điểm vượt ngưỡng ở 5 bước 15 giây liên tiếp (75 giây). Một bước dưới ngưỡng là đếm lại từ đầu. Sau khi bạn bấm hủy, ngưỡng và số bước cần sẽ tăng tạm thời.</p>
+      <p>Nhịp thở chỉ được dùng khi chất lượng ≥ 70%. Khi thiếu, độ lệch nhịp thở coi là 0.</p>
+      <p>Đây là thiết bị nghiên cứu của học sinh, không phải thiết bị y tế.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>Gói dữ liệu gần nhất từ thiết bị</summary>
+    <div class="raw" id="rawLive">–</div>
+    <div class="raw" id="rawBase">–</div>
+  </details>
+
+  <footer>Thiết bị ECG-STRESS · firmware v6 · dữ liệu chỉ nằm trên điện thoại này</footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const SVC = "6e7a0001-5c1f-4d8e-9b2a-3f0e5d7c1a01";
+  const LIVE = "6e7a0002-5c1f-4d8e-9b2a-3f0e5d7c1a01";
+  const BASE = "6e7a0003-5c1f-4d8e-9b2a-3f0e5d7c1a01";
+  const HISTORY_MAX = 240; // 240 bước × 15 s = 1 giờ
+  const SPARK_N = 40;      // 10 phút gần nhất
+
+  const LIVE_FIELDS = ["tag","epoch","uptime","state","hr","rmssd","resp","ecgOk","motionOk","respOk","respQ","leadsOff",
+    "signalValid","scoreValid","z0","z1","z2","p","evidence","level","sustain","need","thrHi","backoff",
+    "calPending","calStreak","calElapsed","calN0","calN1","calN2","motionStd","ecgMissed","bseq"];
+  const BASE_FIELDS = ["tag","personal","src0","src1","src2","mu0","sd0","mu1","sd1","mu2","sd2",
+    "pmu0","psd0","pmu1","psd1","pmu2","psd2","w0","w1","w2","b","tHi","tLo","tHi2",
+    "sustainSec","escalateSec","clearSec","stepSec","useEma","hrGate","n0","n1","n2","floorFrac"];
+
+  function parsePacket(text, fields, tag) {
+    const t = String(text).trim();
+    if (!t.endsWith(",*")) return { ok: false, why: "thiếu dấu kết thúc" };
+    const parts = t.slice(0, -2).split(",");
+    if (parts[0] !== tag) return { ok: false, why: "sai loại gói " + parts[0] };
+    if (parts.length !== fields.length) return { ok: false, why: `số trường ${parts.length} ≠ ${fields.length}` };
+    const o = { tag };
+    for (let i = 1; i < fields.length; i++) {
+      const v = parseFloat(parts[i]);
+      o[fields[i]] = Number.isFinite(v) ? v : NaN;
+    }
+    return { ok: true, v: o };
+  }
+  window.__parse = { parsePacket, LIVE_FIELDS, BASE_FIELDS };
+
+  const CH = [
+    { key: "hr",    zi: 0, name: "Nhịp tim",          unit: "nhịp/phút", color: "--hr",   up: "cao hơn", down: "thấp hơn", dec: 0 },
+    { key: "rmssd", zi: 1, name: "Biến thiên nhịp tim (RMSSD)", unit: "ms", color: "--hrv", up: "cao hơn", down: "thấp hơn", dec: 0 },
+    { key: "resp",  zi: 2, name: "Nhịp thở",          unit: "lần/phút", color: "--resp", up: "nhanh hơn", down: "chậm hơn", dec: 1 },
+  ];
+
+  const S = { base: null, live: null, hist: [], mode: "idle", rawLive: "", rawBase: "", device: null, chars: null, lastBseq: -1 };
+  const $ = (id) => document.getElementById(id);
+
+  // ---------------- Lưu lịch sử trên máy (tiện ích, có thể không có) ----------------
+  function saveLocal() { try { if (S.mode === "live") localStorage.setItem("nod_hist", JSON.stringify({ base: S.base, hist: S.hist.slice(-HISTORY_MAX) })); } catch (e) {} }
+  function loadLocal() { try { const j = JSON.parse(localStorage.getItem("nod_hist") || "null"); if (j && j.base && Array.isArray(j.hist)) return j; } catch (e) {} return null; }
+
+  // ---------------- Dựng khung kênh ----------------
+  function buildChannels() {
+    $("channels").innerHTML = CH.map((c) => `
+      <article class="ch" style="--c: var(${c.color})" id="ch-${c.key}">
+        <div class="ch-head">
+          <div class="ch-name"><span class="sw"></span>${c.name}</div>
+          <div class="ch-now num" id="now-${c.key}">–<small>${c.unit}</small></div>
+        </div>
+        <p class="ch-verdict" id="ver-${c.key}">Chưa có dữ liệu</p>
+        <div class="strip" id="strip-${c.key}"></div>
+        <div class="spark" id="spark-${c.key}"></div>
+        <div class="ch-foot"><span id="base-${c.key}">Ổn định: –</span><span id="src-${c.key}"></span></div>
+      </article>`).join("");
+    $("steps").innerHTML = Array.from({ length: 5 }, () => '<span class="step"></span>').join("");
+  }
+
+  const fmt = (v, d = 0) => Number.isFinite(v) ? v.toFixed(d) : "–";
+  const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+
+  function zOf(c, live, base) {
+    const zf = live && live["z" + c.zi];
+    if (Number.isFinite(zf) && !(c.key === "resp" && !live.respOk)) return zf; // z do thiết bị tính (đã giới hạn ±6)
+    const x = live && live[c.key];
+    if (!Number.isFinite(x) || !base) return NaN;
+    return Math.max(-6, Math.min(6, (x - base["mu" + c.zi]) / base["sd" + c.zi]));
+  }
+
+  function verdict(c, z) {
+    if (!Number.isFinite(z)) return "Bước này không đo được";
+    const a = Math.abs(z);
+    const dir = z >= 0 ? c.up : c.down;
+    if (a < 1) return `<b>Trong vùng ổn định</b> · lệch ${fmt(z, 1)} SD`;
+    if (a < 2) return `<b>Lệch nhẹ</b>: ${dir} bình thường ${fmt(a, 1)} SD`;
+    return `<b>Lệch rõ</b>: ${dir} bình thường ${fmt(a, 1)} SD`;
+  }
+
+  // Dải ngang: trục theo số SD từ -4 đến +4, vùng ±1 và ±2 SD, kim = giá trị hiện tại
+  function drawStrip(el, c, z, base) {
+    const W = Math.max(260, el.clientWidth || 600), H = 34, pad = 14, lo = -4, hi = 4;
+    const X = (v) => pad + (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo) * (W - 2 * pad);
+    const mu = base ? base["mu" + c.zi] : NaN, sd = base ? base["sd" + c.zi] : NaN;
+    const lab = (k) => Number.isFinite(mu) ? fmt(mu + k * sd, c.dec) : "";
+    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Vị trí hiện tại so với vùng ổn định">`;
+    s += `<rect x="${X(-2)}" y="4" width="${X(2) - X(-2)}" height="14" rx="3" fill="var(${c.color})" fill-opacity="0.12"/>`;
+    s += `<rect x="${X(-1)}" y="4" width="${X(1) - X(-1)}" height="14" rx="3" fill="var(${c.color})" fill-opacity="0.28"/>`;
+    s += `<line x1="${X(0)}" x2="${X(0)}" y1="2" y2="20" stroke="var(--ink)" stroke-opacity="0.45" stroke-dasharray="2 2"/>`;
+    [-2, 0, 2].forEach((k) => { s += `<text x="${X(k)}" y="32" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--font-ui)">${k === 0 ? "TB " + lab(0) : lab(k)}</text>`; });
+    if (Number.isFinite(z)) {
+      const off = Math.abs(z) > 4;
+      s += `<rect x="${X(z) - 3}" y="0" width="6" height="22" rx="2" fill="var(${c.color})" stroke="var(--surface)" stroke-width="1.5"/>`;
+      if (off) s += `<text x="${X(z) + (z > 0 ? -8 : 8)}" y="15" text-anchor="${z > 0 ? "end" : "start"}" font-size="11" font-weight="600" fill="var(${c.color})">${z > 0 ? "›" : "‹"} ${fmt(z, 1)} SD</text>`;
+    }
+    el.innerHTML = s + "</svg>";
+  }
+
+  // Xu hướng 10 phút: vùng ổn định ±1 SD làm nền, đường giá trị, điểm cuối nổi bật; bước lỗi = khoảng trống
+  function drawSpark(el, c, base) {
+    const pts = S.hist.slice(-SPARK_N);
+    const W = Math.max(260, el.clientWidth || 600), H = 74, padL = 4, padR = 40, padT = 6, padB = 6;
+    const mu = base ? base["mu" + c.zi] : NaN, sd = base ? base["sd" + c.zi] : NaN;
+    const vals = pts.map((p) => p[c.key]).filter(Number.isFinite);
+    let lo = Number.isFinite(mu) ? mu - 2.2 * sd : Infinity, hi = Number.isFinite(mu) ? mu + 2.2 * sd : -Infinity;
+    vals.forEach((v) => { lo = Math.min(lo, v); hi = Math.max(hi, v); });
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi - lo < 1e-6) { el.innerHTML = ""; return; }
+    const span = hi - lo; lo -= span * 0.06; hi += span * 0.06;
+    const X = (i) => padL + (SPARK_N <= 1 ? 0 : i / (SPARK_N - 1)) * (W - padL - padR);
+    const Y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+    const off = SPARK_N - pts.length;
+    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Xu hướng 10 phút gần nhất">`;
+    if (Number.isFinite(mu)) {
+      s += `<rect x="${padL}" y="${Y(mu + sd)}" width="${W - padL - padR}" height="${Y(mu - sd) - Y(mu + sd)}" fill="var(${c.color})" fill-opacity="0.13"/>`;
+      s += `<line x1="${padL}" x2="${W - padR}" y1="${Y(mu)}" y2="${Y(mu)}" stroke="var(${c.color})" stroke-opacity="0.5" stroke-dasharray="4 4"/>`;
+    }
+    let d = "", pen = false, last = null;
+    pts.forEach((p, i) => {
+      const v = p[c.key];
+      if (Number.isFinite(v)) { d += (pen ? "L" : "M") + X(i + off).toFixed(1) + " " + Y(v).toFixed(1); pen = true; last = [X(i + off), Y(v), v]; }
+      else pen = false;
+    });
+    if (d) s += `<path d="${d}" fill="none" stroke="var(${c.color})" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    if (last) s += `<circle cx="${last[0]}" cy="${last[1]}" r="4" fill="var(${c.color})" stroke="var(--surface)" stroke-width="2"/>`;
+    s += `<text x="${W - padR + 6}" y="${padT + 9}" font-size="11" fill="var(--muted)">${fmt(hi, c.dec)}</text>`;
+    s += `<text x="${W - padR + 6}" y="${H - padB}" font-size="11" fill="var(--muted)">${fmt(lo, c.dec)}</text>`;
+    el.innerHTML = s + "</svg>";
+  }
+
+  function render() {
+    const L = S.live, B = S.base;
+    // Kết nối
+    const pill = $("connPill");
+    pill.className = "pill" + (S.mode === "live" ? " live" : S.mode === "demo" ? " demo" : "");
+    $("connText").textContent = S.mode === "live" ? "Đã kết nối" : S.mode === "demo" ? "Dữ liệu mô phỏng" : S.mode === "connecting" ? "Đang kết nối…" : "Chưa kết nối";
+    $("btnDisconnect").hidden = !(S.mode === "live" || S.mode === "demo");
+    $("btnConnect").disabled = S.mode === "connecting";
+
+    // Trạng thái
+    const st = $("status");
+    let word = "Đang chờ", sub = "Kết nối thiết bị hoặc xem dữ liệu mô phỏng", color = "var(--muted)";
+    st.classList.remove("l1", "l2");
+    if (L) {
+      if (L.state === 1) { word = "Đang đo baseline"; sub = "Ngồi yên, thở bình thường trong 150 giây"; color = "var(--hrv)"; }
+      else if (L.state === 0) { word = L.calPending ? "Chờ tín hiệu ổn định" : "Chưa có baseline"; sub = L.calPending ? `Calibration sẽ tự bắt đầu sau ${L.calStreak}/2 cửa sổ hợp lệ liên tiếp` : "Bấm nút BOOT trên thiết bị để calibration"; color = "var(--muted)"; }
+      else if (L.level >= 2) { word = "Căng thẳng mức 2"; sub = "Thiết bị đang rung hướng dẫn thở dài hơn"; color = "var(--crit)"; st.classList.add("l2"); }
+      else if (L.level === 1) { word = "Căng thẳng mức 1"; sub = "Thiết bị rung hướng dẫn thở: hít 4 giây, thở ra 6 giây"; color = "var(--crit)"; st.classList.add("l1"); }
+      else if (!L.signalValid) { word = "Tín hiệu chưa tốt"; sub = L.leadsOff ? "Điện cực bị tuột" : !L.motionOk ? "Đang cử động nhiều, bước này bị bỏ qua" : "ECG không đủ nhịp hợp lệ"; color = "var(--warn)"; }
+      else if (L.sustain > 0) { word = "Đang theo dõi sát"; sub = "Điểm vượt ngưỡng, chưa đủ lâu để cảnh báo"; color = "var(--warn)"; }
+      else { word = "Bình thường"; sub = "Các chỉ số gần trạng thái ổn định của bạn"; color = "var(--ok)"; }
+    }
+    st.style.setProperty("--state-color", color);
+    $("stWord").textContent = word; $("stSub").textContent = sub;
+    $("stEpoch").textContent = L ? `bước #${L.epoch} · ${fmtUptime(L.uptime)}` : "";
+
+    const thr = L && Number.isFinite(L.thrHi) ? L.thrHi : (B ? B.tHi : NaN);
+    const ev = L ? L.evidence : NaN;
+    $("scoreFill").style.width = Number.isFinite(ev) ? (Math.max(0, Math.min(1, ev)) * 100) + "%" : "0";
+    $("scoreMark").style.left = Number.isFinite(thr) ? `calc(${thr * 100}% - 1px)` : "-10px";
+    $("thrText").textContent = Number.isFinite(thr) ? `ngưỡng ${fmt(thr, 2)}${L && L.backoff > 1.001 ? " (tăng do vừa bấm hủy)" : ""}` : "ngưỡng";
+    let scoreTxt = "–";
+    if (L && Number.isFinite(ev)) {
+      scoreTxt = fmt(ev, 2);
+      if (Number.isFinite(L.p) && Math.abs(L.p - ev) > 1e-3) scoreTxt += ` (model ${fmt(L.p, 2)}, nhịp tim không tăng nên tính 0)`;
+    }
+    $("scoreText").textContent = scoreTxt;
+
+    const need = L && L.need > 0 ? L.need : (B ? B.sustainSec : 75);
+    const step = B ? B.stepSec : 15;
+    const nSteps = Math.max(1, Math.round(need / step));
+    const steps = $("steps");
+    if (steps.children.length !== nSteps) steps.innerHTML = Array.from({ length: nSteps }, () => '<span class="step"></span>').join("");
+    const on = L ? (L.level >= 1 ? nSteps : Math.min(nSteps, Math.round(L.sustain / step))) : 0;
+    [...steps.children].forEach((e, i) => e.classList.toggle("on", i < on));
+    $("sustainText").textContent = L ? (L.level >= 1 ? "đã cảnh báo" : `${L.sustain}/${need} giây`) : "";
+    const calib = L && L.state === 1;
+    $("calibBox").hidden = !calib; $("sustainBox").hidden = !!calib || (L && L.state === 0);
+    if (calib) {
+      $("calibFill").style.width = Math.min(100, L.calElapsed / 150 * 100) + "%";
+      $("calibText").textContent = `${L.calElapsed}/150 giây · ${L.calN0} cửa sổ hợp lệ`;
+    }
+
+    // Kênh
+    CH.forEach((c) => {
+      const x = L ? L[c.key] : NaN;
+      const z = L && L.state === 2 ? zOf(c, L, B) : NaN;
+      $("now-" + c.key).innerHTML = `${fmt(x, c.dec)}<small>${c.unit}</small>`;
+      let v;
+      if (!L) v = "Chưa có dữ liệu";
+      else if (L.state !== 2) v = Number.isFinite(x) ? "Đang thu baseline, chưa so sánh" : "Bước này không đo được";
+      else if (c.key === "resp" && !L.respOk) v = L.respQ > 0 ? `Chất lượng nhịp thở ${L.respQ}% (< 70%), bước này không dùng` : "Chưa đủ 60 giây dữ liệu nhịp thở";
+      else v = verdict(c, z);
+      $("ver-" + c.key).innerHTML = v;
+      drawStrip($("strip-" + c.key), c, z, B);
+      drawSpark($("spark-" + c.key), c, B);
+      if (B) {
+        $("base-" + c.key).textContent = `Ổn định: ${fmt(B["mu" + c.zi], c.dec)} ± ${fmt(B["sd" + c.zi], c.dec + 1)} ${c.unit}`;
+        const pers = B["src" + c.zi] === 1;
+        $("src-" + c.key).innerHTML = pers ? `<span class="tag pers">baseline của bạn · ${B["n" + c.zi]} cửa sổ</span>` : `<span class="tag">trung bình 22 người</span>`;
+      }
+    });
+
+    // Đóng góp
+    const zs = CH.map((c) => (L && L.state === 2 ? zOf(c, L, B) : NaN));
+    const rows = [];
+    if (B) {
+      const contrib = CH.map((c, i) => B["w" + i] * (Number.isFinite(zs[i]) ? zs[i] : NaN));
+      const maxAbs = Math.max(1, ...contrib.filter(Number.isFinite).map(Math.abs), Math.abs(B.b));
+      const bar = (v, colorVar) => {
+        if (!Number.isFinite(v)) return `<div class="cbar"><div class="axis"></div></div>`;
+        const w = Math.abs(v) / maxAbs * 50;
+        const left = v >= 0 ? 50 : 50 - w;
+        return `<div class="cbar"><div class="fill" style="--c: var(${colorVar}); left:${left}%; width:${w}%"></div><div class="axis"></div></div>`;
+      };
+      CH.forEach((c, i) => rows.push(`<div class="crow"><span>${c.name.split(" (")[0]}</span>${bar(contrib[i], c.color)}<span class="v num">${Number.isFinite(contrib[i]) ? (contrib[i] >= 0 ? "+" : "") + fmt(contrib[i], 2) : "–"}</span></div>`));
+      rows.push(`<div class="crow"><span>Hằng số</span>${bar(B.b, "--muted")}<span class="v num">${fmt(B.b, 2)}</span></div>`);
+      const sum = contrib.every(Number.isFinite) ? contrib.reduce((a, b) => a + b, 0) + B.b : NaN;
+      rows.push(`<div class="crow"><span><b>Tổng</b></span><span class="small muted">điểm = 1 / (1 + e<sup>−tổng</sup>) = ${Number.isFinite(sum) ? fmt(1 / (1 + Math.exp(-sum)), 2) : "–"}</span><span class="v num"><b>${fmt(sum, 2)}</b></span></div>`);
+    }
+    $("contrib").innerHTML = rows.join("") || '<p class="muted small">Chưa có baseline.</p>';
+    $("contribNote").textContent = B && B.hrGate ? "Mỗi thanh là trọng số model × độ lệch (SD) so với baseline. Bên phải trục là đẩy điểm lên. Điểm chỉ được tính vào cảnh báo khi nhịp tim cao hơn baseline." : "Mỗi thanh là trọng số model × độ lệch (SD) so với baseline.";
+
+    // Chất lượng
+    const q = [];
+    const qi = (k, val, good) => q.push(`<div class="q ${good === true ? "good" : good === false ? "bad" : ""}"><span class="k">${k}</span><span class="val num">${val}</span></div>`);
+    if (L) {
+      qi("Điện cực", L.leadsOff ? "Bị tuột" : "Đã gắn", !L.leadsOff);
+      qi("ECG (nhịp tim)", L.ecgOk ? "Hợp lệ" : "Không hợp lệ", !!L.ecgOk);
+      qi("Cử động", L.motionOk ? "Đủ yên" : "Quá nhiều", !!L.motionOk);
+      qi("Nhịp thở", L.respQ ? `${L.respQ}%${L.respOk ? "" : " (không dùng)"}` : "Chưa đủ dữ liệu", L.respQ ? !!L.respOk : undefined);
+      qi("Mẫu ECG bị lỡ", fmt(L.ecgMissed, 0), L.ecgMissed < 50);
+      qi("Độ rung gia tốc", Number.isFinite(L.motionStd) ? fmt(L.motionStd, 3) + " g" : "–");
+    }
+    $("quality").innerHTML = q.join("") || '<p class="muted small">Chưa có dữ liệu.</p>';
+    $("rawLive").textContent = S.rawLive || "–";
+    $("rawBase").textContent = S.rawBase || "–";
+  }
+
+  function fmtUptime(s) {
+    if (!Number.isFinite(s)) return "";
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+    return h ? `chạy ${h} giờ ${m} phút` : `chạy ${m} phút`;
+  }
+
+  function onLive(o, raw) {
+    S.live = o; S.rawLive = raw || S.rawLive;
+    const last = S.hist[S.hist.length - 1];
+    if (!last || last.epoch !== o.epoch) {
+      if (last && o.epoch < last.epoch) S.hist = []; // thiết bị khởi động lại
+      S.hist.push({ epoch: o.epoch, t: Date.now(), state: o.state, hr: o.hr, rmssd: o.rmssd, resp: o.resp, z0: o.z0, z1: o.z1, z2: o.z2, p: o.p, evidence: o.evidence, level: o.level });
+      if (S.hist.length > HISTORY_MAX) S.hist.splice(0, S.hist.length - HISTORY_MAX);
+    }
+    saveLocal();
+    render();
+  }
+
+  // ---------------- Bluetooth ----------------
+  const decoder = new TextDecoder();
+  async function readText(ch) { return decoder.decode(await ch.readValue()); }
+
+  async function refreshBaseline() {
+    const raw = await readText(S.chars.base);
+    const r = parsePacket(raw, BASE_FIELDS, "B1");
+    S.rawBase = raw;
+    if (r.ok) S.base = r.v; else setNotice(`Gói baseline không đọc được (${r.why}). Firmware có thể khác phiên bản dashboard.`);
+  }
+
+  async function handleLiveText(raw) {
+    let r = parsePacket(raw, LIVE_FIELDS, "L1");
+    if (!r.ok) { // thông báo bị cắt do MTU nhỏ: đọc lại toàn bộ giá trị
+      raw = await readText(S.chars.live);
+      r = parsePacket(raw, LIVE_FIELDS, "L1");
+    }
+    if (!r.ok) { S.rawLive = raw; setNotice(`Gói dữ liệu không đọc được (${r.why}).`); render(); return; }
+    if (r.v.bseq !== S.lastBseq) { S.lastBseq = r.v.bseq; await refreshBaseline(); }
+    onLive(r.v, raw);
+  }
+
+  async function connect() {
+    if (!navigator.bluetooth) {
+      setNotice("<b>Trình duyệt này không có Web Bluetooth.</b> Trên Android hãy mở trang bằng Chrome. Trên iPhone dùng ứng dụng Bluefy. Bạn vẫn có thể xem dữ liệu mô phỏng.");
+      return;
+    }
+    stopDemo();
+    if (S.mode === "demo") { S.hist = []; S.base = null; S.live = null; S.rawLive = S.rawBase = ""; S.lastBseq = -1; }
+    S.mode = "connecting"; render();
+    try {
+      const dev = await navigator.bluetooth.requestDevice({ filters: [{ services: [SVC] }] });
+      S.device = dev;
+      dev.addEventListener("gattserverdisconnected", onDisconnected);
+      await openGatt();
+      setNotice("Đã kết nối. Thiết bị gửi một bước mới mỗi 15 giây. Giữ điện thoại trong vòng vài mét.");
+    } catch (e) {
+      S.mode = "idle";
+      const msg = String(e && e.message || e);
+      if (/cancel/i.test(msg) || (e && e.name === "NotFoundError")) setNotice("Chưa chọn thiết bị. Bật thiết bị rồi bấm <b>Kết nối thiết bị</b>, chọn <b>ECG-STRESS</b>.");
+      else if (e && e.name === "SecurityError" || /permission|policy|allowed/i.test(msg)) setNotice("<b>Trang này không được phép dùng Bluetooth ở đây.</b> Bản xem trước trong Claude chặn Bluetooth. Mở bản trang đã đưa lên địa chỉ https (ví dụ GitHub Pages) bằng Chrome trên Android.");
+      else setNotice("Không kết nối được: " + esc(msg) + ". Thử tắt bật thiết bị và kết nối lại.");
+      render();
+    }
+  }
+
+  async function openGatt() {
+    const server = await S.device.gatt.connect();
+    const svc = await server.getPrimaryService(SVC);
+    const live = await svc.getCharacteristic(LIVE);
+    const base = await svc.getCharacteristic(BASE);
+    S.chars = { live, base };
+    S.mode = "live";
+    if (!S.hist.length) { const saved = loadLocal(); if (saved) { S.hist = saved.hist; } }
+    await refreshBaseline();
+    live.addEventListener("characteristicvaluechanged", (ev) => { handleLiveText(decoder.decode(ev.target.value)).catch(() => {}); });
+    await live.startNotifications();
+    await handleLiveText(await readText(live));
+    keepAwake();
+  }
+
+  let retry = 0;
+  async function onDisconnected() {
+    if (S.mode !== "live") return;
+    S.mode = "connecting"; render();
+    setNotice("Mất kết nối. Đang thử kết nối lại…");
+    for (retry = 1; retry <= 5 && S.device; retry++) {
+      await new Promise((r) => setTimeout(r, 1500 * retry));
+      try { await openGatt(); setNotice("Đã kết nối lại."); render(); return; } catch (e) {}
+    }
+    S.mode = "idle"; setNotice("Không kết nối lại được. Bấm <b>Kết nối thiết bị</b> để thử lại."); render();
+  }
+
+  function disconnect() {
+    if (S.mode === "demo") { stopDemo(); S.mode = "idle"; S.live = null; S.base = null; S.hist = []; render(); setNotice(defaultNotice()); return; }
+    const d = S.device; S.device = null; S.mode = "idle";
+    try { d && d.gatt.connected && d.gatt.disconnect(); } catch (e) {}
+    render();
+  }
+
+  let wake = null;
+  async function keepAwake() { try { if ("wakeLock" in navigator && !wake) { wake = await navigator.wakeLock.request("screen"); wake.addEventListener("release", () => { wake = null; }); } } catch (e) {} }
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.mode === "live") keepAwake(); });
+
+  // ---------------- Mô phỏng: chạy đúng công thức firmware (logreg + cổng HR + luật C5) ----------------
+  let demoTimer = null;
+  function stopDemo() { if (demoTimer) { clearInterval(demoTimer); demoTimer = null; } }
+  function startDemo() {
+    disconnect(); stopDemo();
+    S.mode = "demo"; S.hist = [];
+    // Baseline giả định của một người; model và ngưỡng là số thật của firmware v5/v6 (R22)
+    S.base = { tag: "B1", personal: 1, src0: 1, src1: 1, src2: 1, mu0: 74, sd0: 5.2, mu1: 46, sd1: 13, mu2: 15.5, sd2: 1.9,
+      pmu0: 85.77, psd0: 14.91, pmu1: 63.54, psd1: 39.9, pmu2: 17.31, psd2: 3.75,
+      w0: 0.617399216, w1: 0.19618699, w2: 0.102279015, b: -0.200986087, tHi: 0.564991713, tLo: 0.464991689, tHi2: 2.0,
+      sustainSec: 75, escalateSec: 75, clearSec: 30, stepSec: 15, useEma: 0, hrGate: 1, n0: 10, n1: 10, n2: 9, floorFrac: 0.3 };
+    S.rawBase = "(mô phỏng)";
+    const B = S.base;
+    let k = 0, sustain = 0, clear = 0, level = 0;
+    let rnd = 7;
+    const rand = () => { rnd = (rnd * 16807) % 2147483647; return rnd / 2147483647; };
+    const gauss = () => { const u = Math.max(1e-9, rand()), v = rand(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+    const tick = () => {
+      k++;
+      // kịch bản 30 bước (7,5 phút): yên 12 bước → căng thẳng 10 bước → hồi phục, rồi lặp
+      const ph = (k - 1) % 30;
+      const s = ph < 12 ? 0 : ph < 14 ? 0.5 : ph < 22 ? 1 : ph < 25 ? 0.4 : 0;
+      const moving = ph === 7;
+      const hr = B.mu0 + B.sd0 * (s * 3.0 + gauss() * 0.7);
+      const rmssd = Math.max(8, B.mu1 + B.sd1 * (-s * 1.3 + gauss() * 0.6));
+      const respQ = ph === 4 ? 62 : 92 + Math.round(rand() * 8);
+      const respOk = respQ >= 70;
+      const resp = B.mu2 + B.sd2 * (s * 1.8 + gauss() * 0.6);
+      const valid = !moving;
+      const z = [ (hr - B.mu0) / B.sd0, (rmssd - B.mu1) / B.sd1, respOk ? (resp - B.mu2) / B.sd2 : 0 ].map((v) => Math.max(-6, Math.min(6, v)));
+      const p = 1 / (1 + Math.exp(-(B.w0 * z[0] + B.w1 * z[1] + B.w2 * z[2] + B.b)));
+      const evidence = z[0] > 0 ? p : 0;
+      if (valid) {
+        if (level === 0) { sustain = evidence >= B.tHi ? sustain + 15 : 0; if (sustain >= 75) { level = 1; clear = 0; } }
+        else { clear = evidence < B.tLo ? clear + 15 : 0; if (clear >= 30) { level = 0; sustain = 0; clear = 0; } }
+      }
+      const o = { tag: "L1", epoch: k + 40, uptime: (k + 40) * 15, state: 2, hr: valid ? hr : NaN, rmssd: valid ? rmssd : NaN, resp: valid && respOk ? resp : NaN,
+        ecgOk: valid ? 1 : 0, motionOk: valid ? 1 : 0, respOk: valid && respOk ? 1 : 0, respQ, leadsOff: 0, signalValid: valid ? 1 : 0, scoreValid: valid ? 1 : 0,
+        z0: valid ? z[0] : NaN, z1: valid ? z[1] : NaN, z2: valid ? z[2] : NaN, p: valid ? p : NaN, evidence: valid ? evidence : NaN, level,
+        sustain, need: 75, thrHi: B.tHi, backoff: 1, calPending: 0, calStreak: 2, calElapsed: 0, calN0: 10, calN1: 10, calN2: 9,
+        motionStd: moving ? 0.21 : 0.012 + rand() * 0.01, ecgMissed: 0, bseq: 1 };
+      S.rawLive = "(mô phỏng) bước " + o.epoch;
+      onLive(o);
+    };
+    for (let i = 0; i < 16; i++) tick(); // có sẵn 4 phút lịch sử khi mở
+    demoTimer = setInterval(tick, 2500);  // mô phỏng chạy nhanh: 1 bước mỗi 2,5 giây thay vì 15 giây
+    setNotice("<b>Đang xem dữ liệu mô phỏng</b> của một người giả định (chạy nhanh gấp 6 lần). Model, ngưỡng và luật cảnh báo là của firmware thật. Không phải số đo của bạn.");
+  }
+
+  // ---------------- CSV ----------------
+  async function copyCsv() {
+    const head = "epoch,time,state,hr,rmssd,resp,z_hr,z_rmssd,z_resp,p,evidence,level";
+    const rows = S.hist.map((h) => [h.epoch, new Date(h.t).toISOString(), h.state, h.hr, h.rmssd, h.resp, h.z0, h.z1, h.z2, h.p, h.evidence, h.level].map((v) => typeof v === "number" && !Number.isFinite(v) ? "" : v).join(","));
+    const text = [head, ...rows].join("\n");
+    try { await navigator.clipboard.writeText(text); setNotice(`Đã sao chép ${rows.length} dòng CSV.`); }
+    catch (e) { $("rawLive").textContent = text; document.querySelector("details:last-of-type").open = true; setNotice("Không sao chép tự động được. CSV đang hiện trong mục <b>Gói dữ liệu gần nhất</b>, hãy chọn và sao chép tay."); }
+  }
+
+  function setNotice(html) { $("notice").innerHTML = html; }
+  function defaultNotice() {
+    return navigator.bluetooth
+      ? "Bật thiết bị, rồi bấm <b>Kết nối thiết bị</b> và chọn <b>ECG-STRESS</b>. Cần Chrome trên Android, trang mở qua https."
+      : "Trình duyệt này không có Web Bluetooth (cần Chrome trên Android, hoặc Bluefy trên iPhone). Bạn vẫn xem được dữ liệu mô phỏng.";
+  }
+
+  $("btnConnect").addEventListener("click", connect);
+  $("btnDemo").addEventListener("click", startDemo);
+  $("btnDisconnect").addEventListener("click", disconnect);
+  $("btnCopy").addEventListener("click", copyCsv);
+  buildChannels();
+  let rz = null;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(render, 150); });
+  setNotice(defaultNotice());
+  // Mở trang là thấy ngay ví dụ: tự chạy mô phỏng cho tới khi người dùng kết nối thiết bị thật
+  startDemo();
+})();
+</script>
+
+<script>
+// Bản triển khai (GitHub Pages / máy chủ https): đăng ký service worker để cài được như app và mở được khi mất mạng.
+if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+  navigator.serviceWorker.register("sw.js").catch(function () {});
+}
+</script>
+</body>
+</html>
